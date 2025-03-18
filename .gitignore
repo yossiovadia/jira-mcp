@@ -1,0 +1,39 @@
+# Environment variables
+.env
+
+# Python virtual environments
+venv/
+env/
+ENV/
+*/venv/
+*/jira_analyzer/
+jira_analyzer/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Logs
+*.log
+logs/
+
+# Debug files
+debug_files/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/ 
