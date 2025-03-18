@@ -6,8 +6,6 @@ venv/
 env/
 ENV/
 */venv/
-*/jira_analyzer/
-jira_analyzer/
 
 # Python cache files
 __pycache__/
@@ -19,9 +17,6 @@ __pycache__/
 # Logs
 *.log
 logs/
-
-# Debug files
-debug_files/
 
 # IDE specific files
 .idea/
