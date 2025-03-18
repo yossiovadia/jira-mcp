@@ -53,6 +53,30 @@ Once the MCP server is running and connected to Cursor, you can ask questions li
 - `.env`: Environment variables for Jira connection
 - `cursor-mcp-config.json`: Configuration for Cursor
 
+## Testing
+
+The project includes a test suite for the MCP server functionality:
+
+1. **Running Tests**
+   ```bash
+   # From the project root
+   python tests/run_tests.py
+   ```
+
+2. **Development Dependencies**
+   For running tests, install the development dependencies:
+   ```bash
+   pip install -r requirements-dev.txt
+   ```
+
+3. **Test Structure**
+   - `/tests`: Contains all unit tests
+   - `run_tests.py`: Script to discover and run all tests
+   - `test_my_tickets.py`: Tests for the get_my_tickets function
+   - `test_ticket_details.py`: Tests for the get_ticket_details function
+
+For more information on testing, see the [tests/README.md](tests/README.md) file.
+
 ## Troubleshooting
 
 If you encounter "client closed" errors in Cursor:
@@ -96,4 +120,5 @@ If you want to contribute to this project:
 
 1. Make sure to never commit sensitive data (.env is gitignored)
 2. Update requirements.txt if you add new dependencies
-3. Test your changes with Cursor before submitting a pull request 
+3. Test your changes with Cursor before submitting a pull request
+4. Add unit tests for any new functionality 

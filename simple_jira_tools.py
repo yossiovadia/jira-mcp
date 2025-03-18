@@ -79,6 +79,13 @@ Description:
         logger.error(f"Error: {str(e)}")
         return f"Error retrieving ticket details: {str(e)}"
 
-if __name__ == "__main__":
+def main():
+    """
+    Main entry point for the Jira MCP server.
+    This function starts the MCP server.
+    """
     logger.info("Starting Jira MCP server...")
-    mcp.run() 
+    mcp.run()
+
+if __name__ == "__main__":
+    main() 
