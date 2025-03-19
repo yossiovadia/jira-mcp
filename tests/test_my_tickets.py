@@ -14,14 +14,14 @@ class TestMyTickets(unittest.TestCase):
     """Tests for the get_my_tickets function"""
 
     @patch('simple_jira_tools.jira.search_issues')
+    @patch('simple_jira_tools.jira.myself')
     @patch('simple_jira_tools.logger')
-    @patch('simple_jira_tools.os.getenv')
-    def test_get_my_tickets(self, mock_getenv, mock_logger, mock_search_issues):
+    def test_get_my_tickets(self, mock_logger, mock_myself, mock_search_issues):
         """Test get_my_tickets function with tickets."""
         from simple_jira_tools import get_my_tickets
         
-        # Mock the environment variable
-        mock_getenv.return_value = 'test.user'
+        # Mock the JIRA myself() response
+        mock_myself.return_value = {'name': 'test.user'}
         
         # Set up the mock issues
         mock_issue1 = MagicMock()
@@ -49,14 +49,14 @@ class TestMyTickets(unittest.TestCase):
         self.assertIn('NCSFM-124: Test ticket 2 (To Do)', result)
 
     @patch('simple_jira_tools.jira.search_issues')
+    @patch('simple_jira_tools.jira.myself')
     @patch('simple_jira_tools.logger')
-    @patch('simple_jira_tools.os.getenv')
-    def test_get_my_tickets_no_tickets(self, mock_getenv, mock_logger, mock_search_issues):
+    def test_get_my_tickets_no_tickets(self, mock_logger, mock_myself, mock_search_issues):
         """Test get_my_tickets function with no tickets."""
         from simple_jira_tools import get_my_tickets
         
-        # Mock the environment variable
-        mock_getenv.return_value = 'test.user'
+        # Mock the JIRA myself() response
+        mock_myself.return_value = {'name': 'test.user'}
         
         # Set up the mock to return empty list
         mock_search_issues.return_value = []
@@ -72,14 +72,14 @@ class TestMyTickets(unittest.TestCase):
         self.assertEqual("You don't have any assigned tickets", result)
 
     @patch('simple_jira_tools.jira.search_issues')
+    @patch('simple_jira_tools.jira.myself')
     @patch('simple_jira_tools.logger')
-    @patch('simple_jira_tools.os.getenv')
-    def test_get_my_tickets_error(self, mock_getenv, mock_logger, mock_search_issues):
+    def test_get_my_tickets_error(self, mock_logger, mock_myself, mock_search_issues):
         """Test get_my_tickets function with an error."""
         from simple_jira_tools import get_my_tickets
         
-        # Mock the environment variable
-        mock_getenv.return_value = 'test.user'
+        # Mock the JIRA myself() response
+        mock_myself.return_value = {'name': 'test.user'}
         
         # Set up the mock to raise an exception
         mock_search_issues.side_effect = Exception("Connection error")

@@ -30,8 +30,6 @@ def run_tests():
         result = pytest.main([
             "-v",
             os.path.dirname(__file__),
-            "--cov=simple_jira_tools",
-            "--cov-report=term"
         ])
         return 0 if result == 0 else 1
     else:

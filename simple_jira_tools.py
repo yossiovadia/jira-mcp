@@ -23,19 +23,36 @@ load_dotenv()
 # Create server
 mcp = FastMCP("jira")
 
-# Connect to Jira
-jira = JIRA(
-    server=f"https://{os.getenv('JIRA_HOST')}",
-    basic_auth=(os.getenv('JIRA_USERNAME'), os.getenv('JIRA_PASSWORD'))
-)
-logger.info(f"Connected to Jira: {os.getenv('JIRA_HOST')}")
+# Connect to Jira using PAT if available, otherwise use basic auth
+jira_host = os.getenv('JIRA_HOST')
+jira_pat = os.getenv('JIRA_PAT')
+jira_username = os.getenv('JIRA_USERNAME')
+jira_password = os.getenv('JIRA_PASSWORD')
+
+if jira_pat:
+    # Use PAT authentication
+    logger.info("Using PAT authentication")
+    jira = JIRA(
+        server=f"https://{jira_host}",
+        token_auth=jira_pat
+    )
+else:
+    # Fall back to basic authentication
+    logger.info("Using basic authentication")
+    jira = JIRA(
+        server=f"https://{jira_host}",
+        basic_auth=(jira_username, jira_password)
+    )
+logger.info(f"Connected to Jira: {jira_host}")
 
 @mcp.tool()
 def get_my_tickets() -> str:
     """Get all tickets assigned to the current user."""
     logger.info("Tool called: get_my_tickets")
     try:
-        jql = f'assignee = "{os.getenv("JIRA_USERNAME")}"'
+        # Use the authenticated user's username for the query
+        current_user = jira.myself()['name']
+        jql = f'assignee = "{current_user}"'
         issues = jira.search_issues(jql)
         
         if not issues:
