@@ -48,11 +48,11 @@ def test_jira_pat():
         else:
             logger.info("No tickets assigned to you")
             
-        return True
+        assert True  # Authentication was successful
         
     except Exception as e:
         logger.error(f"Error testing PAT authentication: {str(e)}")
-        return False
+        assert False, f"PAT authentication failed: {str(e)}"
 
 if __name__ == "__main__":
     success = test_jira_pat()
