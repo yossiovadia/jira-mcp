@@ -70,4 +70,26 @@ Install these dependencies using:
 
 ```bash
 pip install -r requirements-dev.txt
+```
+
+## Test Files
+
+The test suite includes the following test files:
+
+- `test_auth.py` - Tests for authentication functions
+- `test_jira_pat.py` - Tests for Jira Personal Access Token functionality
+- `test_my_tickets.py` - Tests for retrieving user's tickets
+- `test_ticket_details.py` - Tests for getting ticket details
+- `test_ollama_functions.py` - Tests for Ollama integration
+- `test_attachment_functions.py` - Tests for attachment-related features, including:
+  - Downloading attachments from tickets
+  - Analyzing attachment contents with Ollama
+  - Processing multiple attachments at once
+  - PDF text extraction
+  - Attachment cleanup functionality
+
+To run a specific test file:
+
+```bash
+python -m unittest tests/test_attachment_functions.py
 ``` 

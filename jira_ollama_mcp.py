@@ -9,6 +9,18 @@ import httpx
 from dotenv import load_dotenv
 from jira import JIRA
 from mcp.server.fastmcp import FastMCP
+import io
+import tempfile
+import pathlib
+from datetime import datetime
+import shutil
+
+# Check if the PDF libraries are available
+try:
+    import PyPDF2
+    PDF_SUPPORT = True
+except ImportError:
+    PDF_SUPPORT = False
 
 # Configure logging exactly like the working script
 logging.basicConfig(
@@ -34,7 +46,10 @@ jira_password = os.getenv('JIRA_PASSWORD')
 # Ollama configuration
 ollama_base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11435')
 ollama_model = os.getenv('OLLAMA_MODEL', 'deepseek-r1:14b-qwen-distill-q8_0')
+ollama_temperature = float(os.getenv('OLLAMA_TEMPERATURE', '0.7'))
+ollama_context_length = int(os.getenv('OLLAMA_CONTEXT_LENGTH', '32768'))
 logger.info(f"Will use Ollama at {ollama_base_url} with model {ollama_model}")
+logger.info(f"Ollama parameters: temperature={ollama_temperature}, context_length={ollama_context_length}")
 
 # Initialize Jira client
 jira = None
@@ -68,7 +83,9 @@ def ask_ollama(prompt, system_message=None):
             "prompt": prompt,
             "system": system_message if system_message else "",
             "stream": False,  # We want a complete response, not streaming
-            "raw": False      # We want a processed response, not raw output
+            "raw": False,     # We want a processed response, not raw output
+            "temperature": ollama_temperature,
+            "context_length": ollama_context_length
         }
         
         logger.info(f"Sending prompt to Ollama: {prompt[:100]}...")
@@ -287,6 +304,338 @@ def analyze_ticket(ticket_key: str, question: str) -> str:
     except Exception as e:
         logger.error(f"Error analyzing ticket: {str(e)}")
         return f"Error analyzing ticket: {str(e)}"
+
+@mcp.tool()
+def get_ticket_attachments(ticket_key: str) -> str:
+    """Fetch and download all attachments from a Jira ticket to a local directory.
+    
+    Args:
+        ticket_key: The Jira ticket key (e.g., PROJ-1234)
+    """
+    logger.info(f"Tool called: get_ticket_attachments for {ticket_key}")
+    
+    if not jira:
+        return "Error: Not connected to Jira"
+    
+    try:
+        # Get the issue
+        issue = jira.issue(ticket_key)
+        
+        # Check if there are any attachments
+        if not hasattr(issue.fields, 'attachment') or not issue.fields.attachment:
+            return f"No attachments found for ticket {ticket_key}"
+        
+        # Create directory for attachments if it doesn't exist
+        attachments_dir = os.path.join(os.getcwd(), "attachments", ticket_key)
+        os.makedirs(attachments_dir, exist_ok=True)
+        
+        # Download each attachment
+        downloaded_files = []
+        for attachment in issue.fields.attachment:
+            # Get the attachment data
+            attachment_data = attachment.get()
+            
+            # Clean the filename to avoid any path traversal issues
+            safe_filename = os.path.basename(attachment.filename)
+            file_path = os.path.join(attachments_dir, safe_filename)
+            
+            # Save the attachment
+            with open(file_path, 'wb') as f:
+                f.write(attachment_data)
+            
+            downloaded_files.append({
+                'filename': safe_filename,
+                'path': file_path,
+                'size': os.path.getsize(file_path),
+                'mime_type': attachment.mimeType if hasattr(attachment, 'mimeType') else 'unknown'
+            })
+        
+        # Return a message about the downloaded files
+        if downloaded_files:
+            support_msg = "PDF files are also supported." if PDF_SUPPORT else "Install PyPDF2 to enable PDF support."
+            return f"Downloaded {len(downloaded_files)} attachment(s) from ticket {ticket_key} to the 'attachments/{ticket_key}' directory. {support_msg}"
+        else:
+            return f"No attachments found for ticket {ticket_key}."
+    
+    except Exception as e:
+        logger.error(f"Error downloading attachments: {str(e)}")
+        return f"Error downloading attachments from ticket {ticket_key}: {str(e)}"
+
+# Helper function to extract text from PDF files
+def extract_text_from_pdf(pdf_path):
+    """Extract text content from a PDF file."""
+    if not PDF_SUPPORT:
+        return "PDF extraction is not available. Install PyPDF2 package to enable this feature."
+    
+    try:
+        text = ""
+        with open(pdf_path, "rb") as f:
+            pdf_reader = PyPDF2.PdfReader(f)
+            for page_num in range(len(pdf_reader.pages)):
+                page = pdf_reader.pages[page_num]
+                text += f"\n--- Page {page_num + 1} ---\n"
+                text += page.extract_text() or "No text content on this page."
+        
+        return text if text.strip() else "No extractable text content found in the PDF."
+    except Exception as e:
+        logger.error(f"Error extracting text from PDF: {str(e)}")
+        return f"Error extracting text from PDF: {str(e)}"
+
+@mcp.tool()
+def analyze_attachment(ticket_key: str, filename: str, question: str = None) -> str:
+    """Analyze a specific attachment from a Jira ticket using Ollama.
+    
+    Args:
+        ticket_key: The Jira ticket key (e.g., PROJ-1234)
+        filename: The name of the attachment file to analyze
+        question: Optional specific question about the attachment
+    """
+    logger.info(f"Tool called: analyze_attachment for {ticket_key}, file: {filename}")
+    
+    if not jira:
+        return "Error: Not connected to Jira"
+    
+    # Construct the path to the attachment
+    attachments_dir = os.path.join(os.getcwd(), "attachments", ticket_key)
+    file_path = os.path.join(attachments_dir, os.path.basename(filename))
+    
+    # Check if the file exists
+    if not os.path.exists(file_path):
+        return f"Error: Attachment '{filename}' not found for ticket {ticket_key}. Please run get_ticket_attachments first."
+    
+    try:
+        # Check file size
+        file_size = os.path.getsize(file_path)
+        if file_size > 10 * 1024 * 1024:  # 10MB limit
+            return f"Error: File is too large ({file_size / 1024 / 1024:.1f} MB) for analysis. Maximum size is 10MB."
+        
+        # Read file content
+        file_extension = os.path.splitext(filename)[1].lower()
+        file_content = None
+        
+        # Handle different file types
+        try:
+            # Handle text files
+            if file_extension in ['.txt', '.md', '.json', '.csv', '.py', '.js', '.html', '.css', '.java', '.c', '.cpp', '.h', '.cs', '.php', '.ts', '.yml', '.yaml']:
+                with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                    file_content = f.read()
+            # Handle PDF files
+            elif file_extension == '.pdf' and PDF_SUPPORT:
+                file_content = extract_text_from_pdf(file_path)
+            # Handle binary files (could be extended with more formats)
+            else:
+                return f"The file type '{file_extension}' is not currently supported for content analysis. Supported types include text files and PDFs (if PyPDF2 is installed)."
+        except Exception as read_error:
+            logger.error(f"Error reading file: {str(read_error)}")
+            return f"Error reading file '{filename}': {str(read_error)}"
+        
+        if not file_content:
+            return f"Could not extract content from file '{filename}'"
+        
+        # Construct prompt based on whether a question was provided
+        if question:
+            prompt = f"Please analyze this file content from ticket {ticket_key} and answer the following question:\n\nQuestion: {question}\n\nFile: {filename}\n\nContent:\n{file_content[:100000]}"  # Limit content length
+            system_message = "You are a helpful assistant specialized in analyzing document contents. Answer the specific question based only on the information in the document."
+        else:
+            prompt = f"Please analyze this file content from ticket {ticket_key} and provide a summary of its key points or structure:\n\nFile: {filename}\n\nContent:\n{file_content[:100000]}"  # Limit content length
+            system_message = "You are a helpful assistant specialized in analyzing document contents. Provide a concise summary of the key information in the document."
+        
+        # Send to Ollama for analysis
+        logger.info(f"Sending attachment from {ticket_key} to Ollama for analysis")
+        analysis = ask_ollama(prompt, system_message)
+        
+        if analysis and not analysis.startswith("Error"):
+            if question:
+                return f"Analysis of '{filename}' from ticket {ticket_key} regarding '{question}':\n\n{analysis}"
+            else:
+                return f"Analysis of '{filename}' from ticket {ticket_key}:\n\n{analysis}"
+        else:
+            logger.error(f"Failed to get analysis from Ollama: {analysis}")
+            return f"Could not generate analysis using Ollama for file '{filename}'"
+    
+    except Exception as e:
+        logger.error(f"Error analyzing attachment: {str(e)}")
+        return f"Error analyzing attachment '{filename}' from ticket {ticket_key}: {str(e)}"
+
+@mcp.tool()
+def analyze_all_attachments(ticket_key: str, question: str = None) -> str:
+    """Analyze all attachments from a Jira ticket using Ollama.
+    
+    Args:
+        ticket_key: The Jira ticket key (e.g., PROJ-1234)
+        question: Optional specific question about the attachments
+    """
+    logger.info(f"Tool called: analyze_all_attachments for {ticket_key}")
+    
+    if not jira:
+        return "Error: Not connected to Jira"
+    
+    # Check if attachments are already downloaded
+    attachments_dir = os.path.join(os.getcwd(), "attachments", ticket_key)
+    if not os.path.exists(attachments_dir) or not os.listdir(attachments_dir):
+        # Download attachments if not already present
+        download_result = get_ticket_attachments(ticket_key)
+        if download_result.startswith("Error") or download_result.startswith("No attachments"):
+            return download_result
+    
+    # Get list of all files in the directory
+    attachments = []
+    for filename in os.listdir(attachments_dir):
+        file_path = os.path.join(attachments_dir, filename)
+        if os.path.isfile(file_path):
+            file_ext = os.path.splitext(filename)[1].lower()
+            # Include supported file types
+            if file_ext in ['.txt', '.md', '.json', '.csv', '.py', '.js', '.html', '.css', '.java', '.c', '.cpp', '.h', '.cs', '.php', '.ts', '.yml', '.yaml']:
+                attachments.append({
+                    'filename': filename,
+                    'path': file_path,
+                    'extension': file_ext,
+                    'is_pdf': False
+                })
+            elif file_ext == '.pdf' and PDF_SUPPORT:
+                attachments.append({
+                    'filename': filename,
+                    'path': file_path,
+                    'extension': file_ext,
+                    'is_pdf': True
+                })
+    
+    if not attachments:
+        support_msg = "PDF files are also supported." if PDF_SUPPORT else "Install PyPDF2 to enable PDF support."
+        return f"No supported attachments found for ticket {ticket_key}. Only text-based files are currently supported. {support_msg}"
+    
+    # Analyze each supported attachment
+    results = []
+    for attachment in attachments:
+        logger.info(f"Analyzing attachment: {attachment['filename']}")
+        try:
+            # Read file content based on type
+            if attachment['is_pdf']:
+                file_content = extract_text_from_pdf(attachment['path'])
+            else:
+                with open(attachment['path'], 'r', encoding='utf-8', errors='replace') as f:
+                    file_content = f.read()
+            
+            # Prepare summary info about the file
+            file_size = os.path.getsize(attachment['path'])
+            size_kb = file_size / 1024
+            file_summary = f"File: {attachment['filename']} ({size_kb:.1f} KB)"
+            
+            # Create a prompt based on the file
+            if question:
+                prompt = f"Please analyze this file content from ticket {ticket_key} and answer the following question:\n\nQuestion: {question}\n\n{file_summary}\n\nContent:\n{file_content[:50000]}"  # Limit content length
+                system_message = "You are a helpful assistant specialized in analyzing document contents. Answer the specific question based only on the information in the document. Be concise."
+            else:
+                prompt = f"Please analyze this file content from ticket {ticket_key} and provide a brief summary of its key points:\n\n{file_summary}\n\nContent:\n{file_content[:50000]}"  # Limit content length
+                system_message = "You are a helpful assistant specialized in analyzing document contents. Provide a very concise summary (3-5 sentences) of the key information in the document."
+            
+            # Send to Ollama for analysis
+            analysis = ask_ollama(prompt, system_message)
+            
+            if analysis and not analysis.startswith("Error"):
+                results.append({
+                    'filename': attachment['filename'],
+                    'analysis': analysis
+                })
+            else:
+                results.append({
+                    'filename': attachment['filename'],
+                    'analysis': "Analysis failed: Could not process with Ollama"
+                })
+        except Exception as e:
+            logger.error(f"Error analyzing attachment {attachment['filename']}: {str(e)}")
+            results.append({
+                'filename': attachment['filename'],
+                'analysis': f"Analysis failed: {str(e)}"
+            })
+    
+    # Compile the results
+    if results:
+        # Decide on final response format
+        if question:
+            # If a question was asked, compile a final answer
+            combined_prompt = f"I have analyzed {len(results)} attachments from ticket {ticket_key} regarding the question: '{question}'. Here are the individual analyses:\n\n"
+            for result in results:
+                combined_prompt += f"=== {result['filename']} ===\n{result['analysis']}\n\n"
+            combined_prompt += f"Based on ALL the above analyses, provide a comprehensive answer to the question: '{question}'"
+            
+            system_message = "You are a helpful assistant that synthesizes information from multiple documents. Provide a concise, comprehensive answer to the question based on all the document analyses."
+            final_answer = ask_ollama(combined_prompt, system_message)
+            
+            response = f"Analysis of all attachments from ticket {ticket_key} regarding '{question}':\n\n{final_answer}\n\n"
+            response += "--- Individual file analyses ---\n"
+            for result in results:
+                response += f"\n=== {result['filename']} ===\n{result['analysis']}\n"
+            
+            return response
+        else:
+            # Just provide individual summaries
+            response = f"Analysis of {len(results)} attachments from ticket {ticket_key}:\n\n"
+            for result in results:
+                response += f"=== {result['filename']} ===\n{result['analysis']}\n\n"
+            
+            return response
+    else:
+        return f"Could not analyze any attachments from ticket {ticket_key}"
+
+@mcp.tool()
+def cleanup_attachments(ticket_key: str = None) -> str:
+    """Delete downloaded attachments for a specific ticket or all tickets.
+    
+    Args:
+        ticket_key: Optional Jira ticket key (e.g., PROJ-1234). If not provided, will clean up all attachments.
+    """
+    logger.info(f"Tool called: cleanup_attachments for {ticket_key if ticket_key else 'all tickets'}")
+    
+    attachments_base_dir = os.path.join(os.getcwd(), "attachments")
+    
+    # Create directory if it doesn't exist (though this shouldn't happen)
+    if not os.path.exists(attachments_base_dir):
+        return "No attachments directory found. Nothing to clean up."
+    
+    if ticket_key:
+        # Delete attachments for a specific ticket
+        ticket_dir = os.path.join(attachments_base_dir, ticket_key)
+        if not os.path.exists(ticket_dir):
+            return f"No attachments found for ticket {ticket_key}. Nothing to clean up."
+        
+        try:
+            # Count the number of files before deletion
+            file_count = sum(1 for _ in os.listdir(ticket_dir) if os.path.isfile(os.path.join(ticket_dir, _)))
+            
+            # Delete the directory and all its contents
+            shutil.rmtree(ticket_dir)
+            return f"Successfully deleted {file_count} attachment(s) for ticket {ticket_key}."
+        except Exception as e:
+            logger.error(f"Error cleaning up attachments for ticket {ticket_key}: {str(e)}")
+            return f"Error cleaning up attachments for ticket {ticket_key}: {str(e)}"
+    else:
+        # Delete all attachments
+        try:
+            # Count tickets and files before deletion
+            ticket_count = 0
+            file_count = 0
+            
+            for item in os.listdir(attachments_base_dir):
+                item_path = os.path.join(attachments_base_dir, item)
+                if os.path.isdir(item_path):
+                    ticket_count += 1
+                    file_count += sum(1 for _ in os.listdir(item_path) if os.path.isfile(os.path.join(item_path, _)))
+            
+            # If there's nothing to delete
+            if ticket_count == 0:
+                return "No attachments found. Nothing to clean up."
+            
+            # Delete all contents but keep the base directory
+            for item in os.listdir(attachments_base_dir):
+                item_path = os.path.join(attachments_base_dir, item)
+                if os.path.isdir(item_path):
+                    shutil.rmtree(item_path)
+            
+            return f"Successfully deleted {file_count} attachment(s) from {ticket_count} ticket(s)."
+        except Exception as e:
+            logger.error(f"Error cleaning up all attachments: {str(e)}")
+            return f"Error cleaning up all attachments: {str(e)}"
 
 def main():
     """
