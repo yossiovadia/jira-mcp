@@ -10,5 +10,5 @@ source ./venv/bin/activate
 export PYTHONUNBUFFERED=1
 
 # Run the Ollama MCP server
-# The script will automatically load variables from .env.ollama
+# The script will automatically load variables from .env
 python jira_ollama_mcp.py 

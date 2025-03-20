@@ -19,8 +19,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("jira-ollama")
 
-# Load environment variables from the Ollama .env file
-load_dotenv(".env.ollama")
+# Load environment variables from the .env file
+load_dotenv()
 
 # Create server with the same name that worked in the ultra minimal version
 mcp = FastMCP("jira")
