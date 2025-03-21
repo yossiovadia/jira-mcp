@@ -6,6 +6,7 @@ import os
 import logging
 import json
 import httpx
+import re
 from dotenv import load_dotenv
 from jira import JIRA
 from mcp.server.fastmcp import FastMCP
@@ -37,11 +38,39 @@ load_dotenv()
 # Create server with the same name that worked in the ultra minimal version
 mcp = FastMCP("jira")
 
-# Connect to Jira using PAT if available, otherwise use basic auth
-jira_host = os.getenv('JIRA_HOST')
-jira_pat = os.getenv('JIRA_PAT')
-jira_username = os.getenv('JIRA_USERNAME')
-jira_password = os.getenv('JIRA_PASSWORD')
+# Load Jira configurations
+# Primary Jira 
+primary_jira_host = os.getenv('PRIMARY_JIRA_HOST')
+primary_jira_pat = os.getenv('PRIMARY_JIRA_PAT')
+primary_jira_username = os.getenv('PRIMARY_JIRA_USERNAME')
+primary_jira_password = os.getenv('PRIMARY_JIRA_PASSWORD')
+
+# Secondary Jira
+secondary_jira_host = os.getenv('SECONDARY_JIRA_HOST')
+secondary_jira_pat = os.getenv('SECONDARY_JIRA_PAT')
+
+# Backward compatibility - Nokia Jira
+nokia_jira_host = os.getenv('NOKIA_JIRA_HOST', primary_jira_host)
+nokia_jira_pat = os.getenv('NOKIA_JIRA_PAT', primary_jira_pat)
+nokia_jira_username = os.getenv('NOKIA_JIRA_USERNAME', primary_jira_username)
+nokia_jira_password = os.getenv('NOKIA_JIRA_PASSWORD', primary_jira_password)
+
+# Backward compatibility - Red Hat Jira
+redhat_jira_host = os.getenv('REDHAT_JIRA_HOST', secondary_jira_host)
+redhat_jira_pat = os.getenv('REDHAT_JIRA_PAT', secondary_jira_pat)
+
+# Legacy configuration (for backward compatibility)
+jira_host = os.getenv('JIRA_HOST', primary_jira_host)
+jira_pat = os.getenv('JIRA_PAT', primary_jira_pat)
+jira_username = os.getenv('JIRA_USERNAME', primary_jira_username)
+jira_password = os.getenv('JIRA_PASSWORD', primary_jira_password)
+
+# Project prefixes for Secondary Jira (for determining which Jira to use)
+secondary_project_prefixes = os.getenv('SECONDARY_PROJECT_PREFIXES', 'CNV').split(',')
+# Backward compatibility
+redhat_project_prefixes = os.getenv('REDHAT_PROJECT_PREFIXES', secondary_project_prefixes)
+if isinstance(redhat_project_prefixes, str):
+    redhat_project_prefixes = redhat_project_prefixes.split(',')
 
 # Ollama configuration
 ollama_base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11435')
@@ -51,27 +80,98 @@ ollama_context_length = int(os.getenv('OLLAMA_CONTEXT_LENGTH', '32768'))
 logger.info(f"Will use Ollama at {ollama_base_url} with model {ollama_model}")
 logger.info(f"Ollama parameters: temperature={ollama_temperature}, context_length={ollama_context_length}")
 
-# Initialize Jira client
-jira = None
-try:
-    if jira_pat:
-        # Use PAT authentication
-        logger.info("Using PAT authentication")
-        jira = JIRA(
-            server=f"https://{jira_host}",
-            token_auth=jira_pat
-        )
+# Initialize Jira clients
+nokia_jira = None
+redhat_jira = None
+primary_jira = None
+secondary_jira = None
+jira = None  # Default client for backward compatibility
+
+# Helper function to determine which Jira instance to use based on ticket key
+def get_jira_client(ticket_key):
+    """
+    Determine which Jira client to use based on ticket key prefix.
+    If the prefix matches a Secondary Jira project, use Secondary Jira.
+    Otherwise, use Primary Jira.
+    """
+    if not ticket_key:
+        return None
+    
+    # Extract project prefix (e.g., "CNV" from "CNV-12345")
+    match = re.match(r'^([A-Z]+)-\d+', ticket_key)
+    if not match:
+        logger.warning(f"Invalid ticket key format: {ticket_key}")
+        return primary_jira  # Default to Primary Jira
+    
+    project_prefix = match.group(1)
+    
+    # Check if this is a Secondary Jira project
+    if project_prefix in secondary_project_prefixes or project_prefix in redhat_project_prefixes:
+        logger.info(f"Using Secondary Jira for ticket {ticket_key}")
+        return secondary_jira
     else:
-        # Fall back to basic authentication
-        logger.info("Using basic authentication")
-        jira = JIRA(
-            server=f"https://{jira_host}",
-            basic_auth=(jira_username, jira_password)
+        logger.info(f"Using Primary Jira for ticket {ticket_key}")
+        return primary_jira
+
+# Initialize Primary Jira
+try:
+    if primary_jira_pat:
+        # Use PAT authentication
+        logger.info("Initializing Primary Jira with PAT authentication")
+        logger.info(f"Primary Jira host: {primary_jira_host}")
+        logger.debug(f"Primary Jira PAT length: {len(primary_jira_pat) if primary_jira_pat else 0}")
+        primary_jira = JIRA(
+            server=f"https://{primary_jira_host}",
+            token_auth=primary_jira_pat
         )
-    logger.info(f"Connected to Jira: {jira_host}")
+    elif primary_jira_username and primary_jira_password:
+        # Fall back to basic authentication
+        logger.info("Initializing Primary Jira with basic authentication")
+        primary_jira = JIRA(
+            server=f"https://{primary_jira_host}",
+            basic_auth=(primary_jira_username, primary_jira_password)
+        )
+    
+    if primary_jira:
+        # Test connection
+        myself = primary_jira.myself()
+        logger.info(f"Connected to Primary Jira: {primary_jira_host} as {myself['displayName']} ({myself['name']})")
+        
+        # Set up for backward compatibility
+        nokia_jira = primary_jira
 except Exception as e:
-    logger.error(f"Error connecting to Jira: {str(e)}")
-    # Don't exit, allow the server to run even without Jira connection
+    logger.error(f"Error connecting to Primary Jira: {str(e)}")
+    primary_jira = None
+    nokia_jira = None
+
+# Initialize Secondary Jira
+try:
+    if secondary_jira_pat:
+        # Use PAT authentication for Secondary Jira
+        logger.info("Initializing Secondary Jira with PAT authentication")
+        logger.info(f"Secondary Jira host: {secondary_jira_host}")
+        logger.debug(f"Secondary Jira PAT length: {len(secondary_jira_pat) if secondary_jira_pat else 0}")
+        secondary_jira = JIRA(
+            server=f"https://{secondary_jira_host}",
+            token_auth=secondary_jira_pat
+        )
+        # Test connection
+        myself = secondary_jira.myself()
+        logger.info(f"Connected to Secondary Jira: {secondary_jira_host} as {myself['displayName']} ({myself['name']})")
+        
+        # Set up for backward compatibility
+        redhat_jira = secondary_jira
+except Exception as e:
+    logger.error(f"Error connecting to Secondary Jira: {str(e)}")
+    secondary_jira = None
+    redhat_jira = None
+
+# Set default Jira client for backward compatibility
+jira = primary_jira or nokia_jira
+
+# Log summary status message
+if not primary_jira and not secondary_jira:
+    logger.warning("Not connected to any Jira instance. Check your credentials and network connection.")
 
 # Function to call Ollama
 def ask_ollama(prompt, system_message=None):
@@ -158,26 +258,50 @@ def get_my_tickets() -> str:
     """Get all tickets assigned to the current user."""
     logger.info("Tool called: get_my_tickets")
     
-    if not jira:
-        return "Error: Not connected to Jira"
-        
-    try:
-        # Use the authenticated user's username for the query
-        current_user = jira.myself()['name']
-        jql = f'assignee = "{current_user}"'
-        issues = jira.search_issues(jql)
-        
-        if not issues:
-            return "You don't have any assigned tickets"
-        
-        tickets_info = "Your assigned tickets:\n\n"
-        for issue in issues:
-            tickets_info += f"- {issue.key}: {issue.fields.summary} ({issue.fields.status.name})\n"
-        
-        return tickets_info
-    except Exception as e:
-        logger.error(f"Error: {str(e)}")
-        return f"Error retrieving tickets: {str(e)}"
+    results = []
+    
+    # Check Nokia Jira
+    if nokia_jira:
+        try:
+            # Use the authenticated user's username for the query
+            current_user = nokia_jira.myself()['name']
+            jql = f'assignee = "{current_user}"'
+            issues = nokia_jira.search_issues(jql)
+            
+            if issues:
+                results.append("Your assigned tickets in Nokia Jira:")
+                for issue in issues:
+                    results.append(f"- {issue.key}: {issue.fields.summary} ({issue.fields.status.name})")
+                results.append("")  # Empty line for separation
+        except Exception as e:
+            logger.error(f"Error retrieving Nokia Jira tickets: {str(e)}")
+            results.append(f"Error retrieving Nokia Jira tickets: {str(e)}")
+    else:
+        results.append("Not connected to Nokia Jira")
+    
+    # Check Red Hat Jira
+    if redhat_jira:
+        try:
+            # Use the authenticated user's username for the query
+            current_user = redhat_jira.myself()['name']
+            jql = f'assignee = "{current_user}"'
+            issues = redhat_jira.search_issues(jql)
+            
+            if issues:
+                results.append("Your assigned tickets in Red Hat Jira:")
+                for issue in issues:
+                    results.append(f"- {issue.key}: {issue.fields.summary} ({issue.fields.status.name})")
+                results.append("")  # Empty line for separation
+        except Exception as e:
+            logger.error(f"Error retrieving Red Hat Jira tickets: {str(e)}")
+            results.append(f"Error retrieving Red Hat Jira tickets: {str(e)}")
+    else:
+        results.append("Not connected to Red Hat Jira")
+    
+    if not results:
+        return "Error: Not connected to any Jira instance"
+    
+    return "\n".join(results)
 
 @mcp.tool()
 def get_ticket_details(ticket_key: str) -> str:
@@ -188,12 +312,15 @@ def get_ticket_details(ticket_key: str) -> str:
     """
     logger.info(f"Tool called: get_ticket_details for {ticket_key}")
     
-    if not jira:
-        return "Error: Not connected to Jira"
+    # Get the appropriate Jira client for this ticket
+    jira_client = get_jira_client(ticket_key)
+    
+    if not jira_client:
+        return f"Error: Not connected to Jira for ticket {ticket_key}"
     
     try:
         # Get the issue details
-        issue = jira.issue(ticket_key)
+        issue = jira_client.issue(ticket_key)
         
         # Basic information
         details = f"""
@@ -212,7 +339,7 @@ Description:
         
         # Get comments (simplified approach)
         try:
-            comments = jira.comments(issue)
+            comments = jira_client.comments(issue)
             if comments:
                 details += f"\nComments ({len(comments)}):\n"
                 # Show only first 3 comments to keep response size manageable
@@ -242,8 +369,11 @@ def summarize_ticket(ticket_key: str) -> str:
     """
     logger.info(f"Tool called: summarize_ticket for {ticket_key}")
     
-    if not jira:
-        return "Error: Not connected to Jira"
+    # Get the appropriate Jira client for this ticket
+    jira_client = get_jira_client(ticket_key)
+    
+    if not jira_client:
+        return f"Error: Not connected to Jira for ticket {ticket_key}"
     
     try:
         # First get the ticket details
@@ -261,7 +391,7 @@ def summarize_ticket(ticket_key: str) -> str:
             return f"Summary of {ticket_key}:\n\n{summary}"
         else:
             logger.error(f"Failed to get summary from Ollama: {summary}")
-            return f"Could not generate summary using Ollama. Using built-in summary instead:\n\nTicket {ticket_key} concerns: '{jira.issue(ticket_key).fields.summary}'"
+            return f"Could not generate summary using Ollama. Using built-in summary instead:\n\nTicket {ticket_key} concerns: '{jira_client.issue(ticket_key).fields.summary}'"
     except Exception as e:
         logger.error(f"Error summarizing ticket: {str(e)}")
         return f"Error summarizing ticket: {str(e)}"
@@ -276,8 +406,11 @@ def analyze_ticket(ticket_key: str, question: str) -> str:
     """
     logger.info(f"Tool called: analyze_ticket for {ticket_key} with question: {question}")
     
-    if not jira:
-        return "Error: Not connected to Jira"
+    # Get the appropriate Jira client for this ticket
+    jira_client = get_jira_client(ticket_key)
+    
+    if not jira_client:
+        return f"Error: Not connected to Jira for ticket {ticket_key}"
     
     try:
         # First get the ticket details
@@ -297,7 +430,7 @@ def analyze_ticket(ticket_key: str, question: str) -> str:
             logger.error(f"Failed to get analysis from Ollama: {analysis}")
             # Provide a basic response without Ollama
             try:
-                ticket = jira.issue(ticket_key)
+                ticket = jira_client.issue(ticket_key)
                 return f"Ollama analysis failed. Basic information about {ticket_key}:\n\nSummary: {ticket.fields.summary}\nStatus: {ticket.fields.status.name}\nAssignee: {ticket.fields.assignee.displayName if hasattr(ticket.fields, 'assignee') and ticket.fields.assignee else 'Unassigned'}"
             except:
                 return f"Ollama analysis failed and could not retrieve basic ticket information. Please check the ticket manually."
@@ -314,12 +447,15 @@ def get_ticket_attachments(ticket_key: str) -> str:
     """
     logger.info(f"Tool called: get_ticket_attachments for {ticket_key}")
     
-    if not jira:
-        return "Error: Not connected to Jira"
+    # Get the appropriate Jira client for this ticket
+    jira_client = get_jira_client(ticket_key)
+    
+    if not jira_client:
+        return f"Error: Not connected to Jira for ticket {ticket_key}"
     
     try:
         # Get the issue
-        issue = jira.issue(ticket_key)
+        issue = jira_client.issue(ticket_key)
         
         # Check if there are any attachments
         if not hasattr(issue.fields, 'attachment') or not issue.fields.attachment:
@@ -392,8 +528,11 @@ def analyze_attachment(ticket_key: str, filename: str, question: str = None) -> 
     """
     logger.info(f"Tool called: analyze_attachment for {ticket_key}, file: {filename}")
     
-    if not jira:
-        return "Error: Not connected to Jira"
+    # Get the appropriate Jira client for this ticket
+    jira_client = get_jira_client(ticket_key)
+    
+    if not jira_client:
+        return f"Error: Not connected to Jira for ticket {ticket_key}"
     
     # Construct the path to the attachment
     attachments_dir = os.path.join(os.getcwd(), "attachments", ticket_key)
@@ -467,8 +606,11 @@ def analyze_all_attachments(ticket_key: str, question: str = None) -> str:
     """
     logger.info(f"Tool called: analyze_all_attachments for {ticket_key}")
     
-    if not jira:
-        return "Error: Not connected to Jira"
+    # Get the appropriate Jira client for this ticket
+    jira_client = get_jira_client(ticket_key)
+    
+    if not jira_client:
+        return f"Error: Not connected to Jira for ticket {ticket_key}"
     
     # Check if attachments are already downloaded
     attachments_dir = os.path.join(os.getcwd(), "attachments", ticket_key)

@@ -51,8 +51,8 @@ class TestAttachmentFunctions(unittest.TestCase):
         # Mock open function
         mock_file = MagicMock()
         with patch('builtins.open', mock_open()):
-            # Patch the jira object
-            with patch('jira_ollama_mcp.jira', mock_jira):
+            # Patch the get_jira_client function to return our mock jira
+            with patch('jira_ollama_mcp.get_jira_client', return_value=mock_jira):
                 # Call the function
                 result = get_ticket_attachments('TEST-123')
         
@@ -81,8 +81,8 @@ class TestAttachmentFunctions(unittest.TestCase):
         mock_jira = MagicMock()
         mock_jira.issue.return_value = mock_issue
         
-        # Patch the jira object
-        with patch('jira_ollama_mcp.jira', mock_jira):
+        # Patch the get_jira_client function
+        with patch('jira_ollama_mcp.get_jira_client', return_value=mock_jira):
             # Call the function
             result = get_ticket_attachments('TEST-123')
         
@@ -104,8 +104,8 @@ class TestAttachmentFunctions(unittest.TestCase):
         mock_jira = MagicMock()
         mock_jira.issue.side_effect = Exception("Ticket not found")
         
-        # Patch the jira object
-        with patch('jira_ollama_mcp.jira', mock_jira):
+        # Patch the get_jira_client function
+        with patch('jira_ollama_mcp.get_jira_client', return_value=mock_jira):
             # Call the function
             result = get_ticket_attachments('INVALID-123')
         
