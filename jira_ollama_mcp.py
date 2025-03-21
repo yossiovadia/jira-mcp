@@ -16,14 +16,7 @@ import pathlib
 from datetime import datetime
 import shutil
 
-# Check if the PDF libraries are available
-try:
-    import PyPDF2
-    PDF_SUPPORT = True
-except ImportError:
-    PDF_SUPPORT = False
-
-# Configure logging exactly like the working script
+# Configure logging first, before any functions use it
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -31,6 +24,34 @@ logging.basicConfig(
     filemode='w'
 )
 logger = logging.getLogger("jira-ollama")
+
+# Function to get the MCP base path regardless of working directory
+def get_mcp_base_path():
+    """Returns the base path for MCP resources regardless of working directory"""
+    # First check for environment variable with fallback
+    if 'MCP_BASE_PATH' in os.environ:
+        base_path = os.environ['MCP_BASE_PATH']
+        logger.info(f"Using MCP_BASE_PATH from environment: {base_path}")
+        return base_path
+    
+    # Use the script's directory as a fallback
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    logger.info(f"Using script directory for MCP_BASE_PATH: {script_dir}")
+    return script_dir
+
+# Define a constant for the attachments directory
+ATTACHMENTS_BASE_DIR = os.path.join(get_mcp_base_path(), "attachments")
+
+# Ensure the base attachments directory exists
+os.makedirs(ATTACHMENTS_BASE_DIR, exist_ok=True)
+logger.info(f"Attachments directory set to: {ATTACHMENTS_BASE_DIR}")
+
+# Check if the PDF libraries are available
+try:
+    import PyPDF2
+    PDF_SUPPORT = True
+except ImportError:
+    PDF_SUPPORT = False
 
 # Load environment variables from the .env file
 load_dotenv()
@@ -462,7 +483,7 @@ def get_ticket_attachments(ticket_key: str) -> str:
             return f"No attachments found for ticket {ticket_key}"
         
         # Create directory for attachments if it doesn't exist
-        attachments_dir = os.path.join(os.getcwd(), "attachments", ticket_key)
+        attachments_dir = os.path.join(ATTACHMENTS_BASE_DIR, ticket_key)
         os.makedirs(attachments_dir, exist_ok=True)
         
         # Download each attachment
@@ -535,7 +556,7 @@ def analyze_attachment(ticket_key: str, filename: str, question: str = None) -> 
         return f"Error: Not connected to Jira for ticket {ticket_key}"
     
     # Construct the path to the attachment
-    attachments_dir = os.path.join(os.getcwd(), "attachments", ticket_key)
+    attachments_dir = os.path.join(ATTACHMENTS_BASE_DIR, ticket_key)
     file_path = os.path.join(attachments_dir, os.path.basename(filename))
     
     # Check if the file exists
@@ -613,7 +634,7 @@ def analyze_all_attachments(ticket_key: str, question: str = None) -> str:
         return f"Error: Not connected to Jira for ticket {ticket_key}"
     
     # Check if attachments are already downloaded
-    attachments_dir = os.path.join(os.getcwd(), "attachments", ticket_key)
+    attachments_dir = os.path.join(ATTACHMENTS_BASE_DIR, ticket_key)
     if not os.path.exists(attachments_dir) or not os.listdir(attachments_dir):
         # Download attachments if not already present
         download_result = get_ticket_attachments(ticket_key)
@@ -729,7 +750,8 @@ def cleanup_attachments(ticket_key: str = None) -> str:
     """
     logger.info(f"Tool called: cleanup_attachments for {ticket_key if ticket_key else 'all tickets'}")
     
-    attachments_base_dir = os.path.join(os.getcwd(), "attachments")
+    # Use the base attachments directory
+    attachments_base_dir = ATTACHMENTS_BASE_DIR
     
     # Create directory if it doesn't exist (though this shouldn't happen)
     if not os.path.exists(attachments_base_dir):
