@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Setup script for the Jira MCP server package.
+Setup script for the Jira-Ollama MCP server package.
 """
 from setuptools import setup, find_packages
 import os
@@ -14,11 +14,11 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
     requirements = [line.strip() for line in fh.readlines()]
 
 setup(
-    name="jira-mcp",
+    name="jira-ollama-mcp",
     version="0.1.0",
     author="Nokia Team",
     author_email="user@example.com",
-    description="A Model Context Protocol (MCP) server for Jira integration",
+    description="A Model Context Protocol (MCP) server for Jira with Ollama integration",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/yourusername/jira-mcp",
@@ -40,7 +40,7 @@ setup(
     # Entry points for command-line scripts
     entry_points={
         "console_scripts": [
-            "jira-mcp=simple_jira_tools:main",
+            "jira-ollama-mcp=jira_ollama_mcp:main",
         ],
     },
 ) 
