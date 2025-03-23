@@ -9,6 +9,6 @@ source ./venv/bin/activate
 # Set PYTHONUNBUFFERED for immediate logging
 export PYTHONUNBUFFERED=1
 
-# Run the Ollama MCP server
+# Run the modular MCP server
 # The script will automatically load variables from .env
-python jira_ollama_mcp.py 
+python -m jira_mcp.main 

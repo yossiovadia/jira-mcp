@@ -1,5 +1,15 @@
 {
   "mcpServers": {
+    "jira": {
+      "command": "/bin/bash",
+      "args": [
+        "/Users/yovadia/jira-mcp/run_jira_mcp.sh"
+      ],
+      "cwd": "/Users/yovadia/jira-mcp",
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
     "jira-mcp-server": {
       "command": "/bin/bash",
       "args": [

@@ -15,6 +15,9 @@ import tempfile
 import pathlib
 from datetime import datetime
 import shutil
+import hashlib
+import time
+from functools import lru_cache
 
 # Configure logging first, before any functions use it
 logging.basicConfig(
@@ -87,8 +90,9 @@ ollama_base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11435')
 ollama_model = os.getenv('OLLAMA_MODEL', 'deepseek-r1:14b-qwen-distill-q8_0')
 ollama_temperature = float(os.getenv('OLLAMA_TEMPERATURE', '0.7'))
 ollama_context_length = int(os.getenv('OLLAMA_CONTEXT_LENGTH', '32768'))
+ollama_timeout = float(os.getenv('OLLAMA_TIMEOUT', '120.0'))  # Default timeout of 2 minutes
 logger.info(f"Will use Ollama at {ollama_base_url} with model {ollama_model}")
-logger.info(f"Ollama parameters: temperature={ollama_temperature}, context_length={ollama_context_length}")
+logger.info(f"Ollama parameters: temperature={ollama_temperature}, context_length={ollama_context_length}, timeout={ollama_timeout}s")
 
 # Initialize Jira clients
 nokia_jira = None
@@ -96,6 +100,12 @@ redhat_jira = None
 primary_jira = None
 secondary_jira = None
 jira = None  # Default client for backward compatibility
+
+# Simple memory cache for Ollama responses
+ollama_cache = {}
+OLLAMA_CACHE_SIZE = int(os.getenv('OLLAMA_CACHE_SIZE', '50'))  # Maximum cache entries
+OLLAMA_CACHE_TTL = int(os.getenv('OLLAMA_CACHE_TTL', '3600'))  # Time to live in seconds (1 hour default)
+logger.info(f"Ollama cache configured: size={OLLAMA_CACHE_SIZE}, TTL={OLLAMA_CACHE_TTL}s")
 
 # Helper function to determine which Jira instance to use based on ticket key
 def get_jira_client(ticket_key):
@@ -129,7 +139,6 @@ try:
         # Use PAT authentication
         logger.info("Initializing Primary Jira with PAT authentication")
         logger.info(f"Primary Jira host: {primary_jira_host}")
-        logger.debug(f"Primary Jira PAT length: {len(primary_jira_pat) if primary_jira_pat else 0}")
         primary_jira = JIRA(
             server=f"https://{primary_jira_host}",
             token_auth=primary_jira_pat
@@ -160,7 +169,6 @@ try:
         # Use PAT authentication for Secondary Jira
         logger.info("Initializing Secondary Jira with PAT authentication")
         logger.info(f"Secondary Jira host: {secondary_jira_host}")
-        logger.debug(f"Secondary Jira PAT length: {len(secondary_jira_pat) if secondary_jira_pat else 0}")
         secondary_jira = JIRA(
             server=f"https://{secondary_jira_host}",
             token_auth=secondary_jira_pat
@@ -186,6 +194,21 @@ if not primary_jira and not secondary_jira:
 # Function to call Ollama
 def ask_ollama(prompt, system_message=None):
     """Send a prompt to Ollama and get a response."""
+    
+    # Generate a cache key from the prompt and system message
+    cache_key = hashlib.md5((prompt + (system_message or "")).encode()).hexdigest()
+    
+    # Check if we have a cached response and it's still valid
+    if cache_key in ollama_cache:
+        timestamp, cached_response = ollama_cache[cache_key]
+        if time.time() - timestamp < OLLAMA_CACHE_TTL:
+            logger.info(f"Using cached Ollama response for prompt: {prompt[:50]}...")
+            return cached_response
+        else:
+            # Expired, remove from cache
+            del ollama_cache[cache_key]
+            logger.debug(f"Removed expired cache entry for key: {cache_key}")
+    
     try:
         # Create the request data
         data = {
@@ -200,11 +223,11 @@ def ask_ollama(prompt, system_message=None):
         
         logger.info(f"Sending prompt to Ollama: {prompt[:100]}...")
         
-        # Make synchronous request to Ollama
+        # Make synchronous request to Ollama with timeout
         response = httpx.post(
             f"{ollama_base_url}/api/generate",
             json=data,
-            timeout=60.0
+            timeout=ollama_timeout  # Use configured timeout
         )
         
         # Log the raw response for debugging
@@ -220,19 +243,35 @@ def ask_ollama(prompt, system_message=None):
                 if isinstance(result, dict):
                     # The /api/generate endpoint returns a response field
                     if "response" in result:
-                        return result["response"]
+                        response_text = result["response"]
                     # Fallback to message format if using /api/chat
                     elif "message" in result and isinstance(result["message"], dict):
-                        return result["message"].get("content", "No content in response")
+                        response_text = result["message"].get("content", "No content in response")
                     else:
                         # Return the first string value we find
+                        response_text = None
                         for key, value in result.items():
                             if isinstance(value, str) and len(value) > 10:
-                                return value
+                                response_text = value
+                                break
+                        if response_text is None:
+                            # If we're here, we didn't find a good response format, log the full structure
+                            logger.warning(f"Unexpected Ollama response structure: {result}")
+                            response_text = str(result)
+                else:
+                    response_text = str(result)
                 
-                # If we're here, we didn't find a good response format, log the full structure
-                logger.warning(f"Unexpected Ollama response structure: {result}")
-                return str(result)
+                # Cache the response
+                if len(ollama_cache) >= OLLAMA_CACHE_SIZE:
+                    # Remove oldest entry if cache is full
+                    oldest_key = min(ollama_cache.keys(), key=lambda k: ollama_cache[k][0])
+                    del ollama_cache[oldest_key]
+                    logger.debug(f"Removed oldest cache entry for key: {oldest_key}")
+                
+                ollama_cache[cache_key] = (time.time(), response_text)
+                logger.debug(f"Added new cache entry for key: {cache_key}")
+                
+                return response_text
             except json.JSONDecodeError as je:
                 logger.error(f"JSON parsing error: {str(je)}")
                 # Try to salvage a response from the text
@@ -457,6 +496,10 @@ def get_ticket_attachments(ticket_key: str) -> str:
     """
     logger.info(f"Tool called: get_ticket_attachments for {ticket_key}")
     
+    # Security: Validate ticket key format to prevent path traversal
+    if not re.match(r'^[A-Z]+-\d+$', ticket_key):
+        return f"Error: Invalid ticket key format: {ticket_key}"
+    
     # Get the appropriate Jira client for this ticket
     jira_client = get_jira_client(ticket_key)
     
@@ -484,8 +527,10 @@ def get_ticket_attachments(ticket_key: str) -> str:
             return f"No attachments found for ticket {ticket_key}."
         
         for attachment in attachments:
-            # Sanitize the filename
+            # Sanitize the filename to prevent path traversal
             safe_filename = re.sub(r'[\\/*?:"<>|]', "_", attachment.filename)
+            # Additional security: ensure filename doesn't contain path components
+            safe_filename = os.path.basename(safe_filename)
             
             # Get binary data
             attachment_data = attachment.get()
@@ -550,6 +595,14 @@ def analyze_attachment(ticket_key: str, filename: str, question: str = None) -> 
     """
     logger.info(f"Tool called: analyze_attachment for {ticket_key}, file: {filename}")
     
+    # Security: Validate ticket key format to prevent path traversal
+    if not re.match(r'^[A-Z]+-\d+$', ticket_key):
+        return f"Error: Invalid ticket key format: {ticket_key}"
+    
+    # Security: Validate filename to prevent path traversal
+    if os.path.dirname(filename) or not re.match(r'^[a-zA-Z0-9._-]+$', filename):
+        return f"Error: Invalid filename: {filename}. Only alphanumeric characters, dots, underscores and hyphens are allowed."
+    
     # Get the appropriate Jira client for this ticket
     jira_client = get_jira_client(ticket_key)
     
@@ -573,9 +626,10 @@ You can customize this location by setting the MCP_ATTACHMENTS_PATH environment 
     
     # Check file size
     file_size = os.path.getsize(file_path)
-    if file_size > 10 * 1024 * 1024:  # 10MB limit
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB limit
+    if file_size > MAX_FILE_SIZE:
         logger.error(f"Attachment file too large: {file_path} ({file_size} bytes)")
-        return f"Error: Attachment file '{filename}' is too large ({file_size} bytes) to analyze."
+        return f"Error: Attachment file '{filename}' is too large ({file_size} bytes) to analyze. Maximum size allowed is {MAX_FILE_SIZE} bytes."
     
     # Determine file type and read content accordingly
     content = ""
@@ -635,6 +689,10 @@ def analyze_all_attachments(ticket_key: str, question: str = None) -> str:
     """
     logger.info(f"Tool called: analyze_all_attachments for {ticket_key}")
     
+    # Security: Validate ticket key format to prevent path traversal
+    if not re.match(r'^[A-Z]+-\d+$', ticket_key):
+        return f"Error: Invalid ticket key format: {ticket_key}"
+    
     # Get the appropriate Jira client for this ticket
     jira_client = get_jira_client(ticket_key)
     
@@ -665,6 +723,11 @@ You can customize this location by setting the MCP_ATTACHMENTS_PATH environment 
     # Get list of files in the directory
     try:
         files = os.listdir(attachments_dir)
+        # Security check - don't process more than a reasonable number of files at once
+        MAX_FILES = 20
+        if len(files) > MAX_FILES:
+            logger.warning(f"Too many files in {ticket_key} attachment directory: {len(files)}")
+            return f"Error: Too many attachments ({len(files)}) found for ticket {ticket_key}. Maximum of {MAX_FILES} files can be processed at once."
     except Exception as e:
         logger.error(f"Error listing attachments directory: {str(e)}")
         return f"Error listing attachments: {str(e)}"
@@ -723,7 +786,22 @@ def cleanup_attachments(ticket_key: str = None) -> str:
     if not os.path.exists(attachments_base_dir):
         return f"No attachments directory found at {attachments_base_dir}. Nothing to clean up."
     
+    # Security: Make sure attachments_base_dir is a subdirectory of the script directory
+    # or a custom directory specified by environment variable to prevent traversal attacks
+    # This is a defense-in-depth measure in case ATTACHMENTS_BASE_DIR is compromised
+    expected_base_dirs = [os.path.join(SCRIPT_DIR, "attachments")]
+    if 'MCP_ATTACHMENTS_PATH' in os.environ:
+        expected_base_dirs.append(os.environ['MCP_ATTACHMENTS_PATH'])
+    
+    if not any(os.path.normpath(attachments_base_dir) == os.path.normpath(expected) for expected in expected_base_dirs):
+        logger.error(f"Security alert: Attempted to clean up directory outside allowed paths: {attachments_base_dir}")
+        return f"Error: Security restriction. Cannot clean up directory outside of expected paths."
+    
     if ticket_key:
+        # Security validation for ticket_key format
+        if not re.match(r'^[A-Z]+-\d+$', ticket_key):
+            return f"Error: Invalid ticket key format: {ticket_key}"
+        
         # Delete attachments for a specific ticket
         ticket_dir = os.path.join(attachments_base_dir, ticket_key)
         if not os.path.exists(ticket_dir):
