@@ -9,23 +9,6 @@
       "env": {
         "PYTHONUNBUFFERED": "1"
       }
-    },
-    "jira-mcp-server": {
-      "command": "/bin/bash",
-      "args": [
-        "/Users/yovadia/jira-mcp/mcp_with_venv.sh"
-      ],
-      "cwd": "/Users/yovadia/jira-mcp"
-    },
-    "jira-minimal-mcp": {
-      "command": "/bin/bash",
-      "args": [
-        "/Users/yovadia/jira-mcp/minimal_mcp_with_venv.sh"
-      ],
-      "cwd": "/Users/yovadia/jira-mcp",
-      "env": {
-        "PYTHONUNBUFFERED": "1"
-      }
     }
   }
 } 
