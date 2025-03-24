@@ -19,7 +19,7 @@ def validate_ticket_key(ticket_key):
 
 def sanitize_filename(filename):
     """
-    Sanitize a filename to prevent path traversal attacks.
+    Sanitize a filename to prevent path traversal attacks while preserving spaces and parentheses.
     
     Args:
         filename: The filename to sanitize
@@ -27,7 +27,7 @@ def sanitize_filename(filename):
     Returns:
         str: The sanitized filename
     """
-    # Remove any path separators and special characters
+    # Remove dangerous characters but preserve spaces and parentheses
     sanitized = re.sub(r'[\\/*?:"<>|]', "_", filename)
     # Ensure we only get the basename
     sanitized = os.path.basename(sanitized)

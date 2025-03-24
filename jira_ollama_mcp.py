@@ -600,8 +600,12 @@ def analyze_attachment(ticket_key: str, filename: str, question: str = None) -> 
         return f"Error: Invalid ticket key format: {ticket_key}"
     
     # Security: Validate filename to prevent path traversal
-    if os.path.dirname(filename) or not re.match(r'^[a-zA-Z0-9._-]+$', filename):
-        return f"Error: Invalid filename: {filename}. Only alphanumeric characters, dots, underscores and hyphens are allowed."
+    if os.path.dirname(filename):
+        return f"Error: Invalid filename: {filename}. Path traversal is not allowed."
+    
+    # Allow more characters in filenames, but still prevent dangerous ones
+    if not re.match(r'^[a-zA-Z0-9\s._() -]+$', filename):
+        return f"Error: Invalid filename: {filename}. Filename contains invalid characters."
     
     # Get the appropriate Jira client for this ticket
     jira_client = get_jira_client(ticket_key)
