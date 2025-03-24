@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Simple test script to diagnose Jira connection issues
+Diagnostic script to test Jira connection settings and troubleshoot connectivity issues.
+Run this script to verify your Jira credentials and connection settings are working correctly.
 """
 import os
 import sys
@@ -13,7 +14,7 @@ logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger("jira-test")
+logger = logging.getLogger("jira-diagnostic")
 
 # Load environment variables
 load_dotenv()
@@ -28,7 +29,7 @@ def test_jira_connection():
     secondary_jira_host = os.getenv('SECONDARY_JIRA_HOST')
     secondary_jira_pat = os.getenv('SECONDARY_JIRA_PAT')
     
-    print("\n=== Testing Jira Connections ===\n")
+    print("\n=== Jira Connection Diagnostic ===\n")
     
     # Test Primary Jira
     print(f"Testing Primary Jira ({primary_jira_host})...")
