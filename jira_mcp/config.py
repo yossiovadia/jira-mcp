@@ -77,6 +77,13 @@ class Config:
                                                self.secondary_project_prefixes)
         if isinstance(self.redhat_project_prefixes, str):
             self.redhat_project_prefixes = self.redhat_project_prefixes.split(',')
+            
+        # Allowed projects for Primary Jira
+        self.allowed_projects = os.getenv('JIRA_ALLOWED_PROJECTS', '').split(',')
+        if isinstance(self.allowed_projects, str):
+            self.allowed_projects = self.allowed_projects.split(',')
+        # Remove empty strings and whitespace
+        self.allowed_projects = [p.strip() for p in self.allowed_projects if p.strip()]
     
     def _load_ollama_config(self):
         """Load Ollama configuration from environment variables"""
@@ -96,6 +103,7 @@ class Config:
         # Log Jira configuration
         logger.info(f"Primary Jira host: {self.primary_jira_host or 'Not configured'}")
         logger.info(f"Secondary Jira host: {self.secondary_jira_host or 'Not configured'}")
+        logger.info(f"Allowed projects: {', '.join(self.allowed_projects) if self.allowed_projects else 'All'}")
         
         # Log Ollama configuration
         logger.info(f"Ollama URL: {self.ollama_base_url}")

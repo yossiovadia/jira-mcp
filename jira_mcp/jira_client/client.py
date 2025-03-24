@@ -26,12 +26,16 @@ def initialize_jira_clients():
     # Initialize Primary Jira
     try:
         if config.primary_jira_pat:
-            # Use PAT authentication
-            logger.info("Initializing Primary Jira with PAT authentication")
+            # Use Bearer token authentication for Primary Jira
+            logger.info("Initializing Primary Jira with Bearer token authentication")
             logger.info(f"Primary Jira host: {config.primary_jira_host}")
             primary_jira = JIRA(
                 server=f"https://{config.primary_jira_host}",
-                token_auth=config.primary_jira_pat
+                options={
+                    'headers': {
+                        'Authorization': f'Bearer {config.primary_jira_pat}'
+                    }
+                }
             )
         elif config.primary_jira_username and config.primary_jira_password:
             # Fall back to basic authentication
@@ -86,7 +90,7 @@ def get_jira_client(ticket_key):
     """
     Determine which Jira client to use based on ticket key prefix.
     If the prefix matches a Secondary Jira project, use Secondary Jira.
-    Otherwise, use Primary Jira.
+    Otherwise, use Primary Jira if the project is in the allowed list.
     
     Args:
         ticket_key: The Jira ticket key to check
@@ -101,7 +105,7 @@ def get_jira_client(ticket_key):
     match = re.match(r'^([A-Z]+)-\d+', ticket_key)
     if not match:
         logger.warning(f"Invalid ticket key format: {ticket_key}")
-        return primary_jira  # Default to Primary Jira
+        return None
     
     project_prefix = match.group(1)
     
@@ -111,8 +115,13 @@ def get_jira_client(ticket_key):
         logger.info(f"Using Secondary Jira for ticket {ticket_key}")
         return secondary_jira
     else:
-        logger.info(f"Using Primary Jira for ticket {ticket_key}")
-        return primary_jira
+        # Check if project is in allowed list for Primary Jira
+        if not config.allowed_projects or project_prefix in config.allowed_projects:
+            logger.info(f"Using Primary Jira for ticket {ticket_key}")
+            return primary_jira
+        else:
+            logger.warning(f"Project {project_prefix} not in allowed list: {config.allowed_projects}")
+            return None
 
 def get_primary_jira():
     """

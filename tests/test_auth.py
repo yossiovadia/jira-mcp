@@ -60,14 +60,18 @@ class TestJiraAuth(unittest.TestCase):
         # Call initialize method
         initialize_jira_clients()
 
-        # Verify the JIRA client was created with PAT auth - use any_call instead of assert_called_with
+        # Verify the JIRA client was created with Bearer token auth
         self.mock_jira_class.assert_any_call(
             server='https://test.jira.com',
-            token_auth='test-pat-token'
+            options={
+                'headers': {
+                    'Authorization': 'Bearer test-pat-token'
+                }
+            }
         )
         
         # Verify logging
-        self.mock_logger.info.assert_any_call("Initializing Primary Jira with PAT authentication")
+        self.mock_logger.info.assert_any_call("Initializing Primary Jira with Bearer token authentication")
 
     def test_basic_auth_fallback(self):
         """Test that basic authentication is used as fallback when PAT is not available"""
@@ -119,16 +123,19 @@ class TestJiraAuth(unittest.TestCase):
         # Verify the calls in order they were made
         call_args_list = self.mock_jira_class.call_args_list
         
-        # First call should be for primary Jira
+        # First call should be for primary Jira with Bearer token auth
         self.assertEqual(call_args_list[0][1]['server'], 'https://primary.jira.com')
-        self.assertEqual(call_args_list[0][1]['token_auth'], 'primary-pat-token')
+        self.assertEqual(
+            call_args_list[0][1]['options']['headers']['Authorization'],
+            'Bearer primary-pat-token'
+        )
         
-        # Second call should be for secondary Jira
+        # Second call should be for secondary Jira with token_auth
         self.assertEqual(call_args_list[1][1]['server'], 'https://secondary.jira.com')
         self.assertEqual(call_args_list[1][1]['token_auth'], 'secondary-pat-token')
         
         # Verify logging
-        self.mock_logger.info.assert_any_call("Initializing Primary Jira with PAT authentication")
+        self.mock_logger.info.assert_any_call("Initializing Primary Jira with Bearer token authentication")
         self.mock_logger.info.assert_any_call("Initializing Secondary Jira with PAT authentication")
 
 if __name__ == '__main__':
